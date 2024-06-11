@@ -1,13 +1,13 @@
 [package]
 name = "esp-temperature"
 version = "0.1.0"
-authors = ["pepega007xd <brablect@gmail.com>"]
 edition = "2021"
-resolver = "2"
-rust-version = "1.71"
 
 [profile.release]
-opt-level = "s"
+strip = true
+lto = true
+opt-level = "z"
+panic = "abort"
 
 [profile.dev]
 debug = true    # Symbols are nice and they don't increase the size on Flash
