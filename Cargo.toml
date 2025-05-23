@@ -1,0 +1,37 @@
+[package]
+name = "esp-temperature-sensor"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+rust-version = "1.77"
+
+[[bin]]
+name = "esp-temperature-sensor"
+harness = false # do not use the built in cargo test harness -> resolve rust-analyzer errors
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true    # Symbols are nice and they don't increase the size on Flash
+opt-level = "z"
+
+[features]
+default = []
+bme280 = []
+aht10 = []
+
+experimental = ["esp-idf-svc/experimental"]
+
+[dependencies]
+esp-idf-svc = { version = "0.51", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
+bme280 = { version = "0.5.1", features = ["serde"] }
+adafruit-aht10 = { git = "https://github.com/miathedev/adafruit-aht10" }
+serde_json = "1.0.140"
+anyhow = "1.0.98"
+dotenvy_macro = "0.15.7"
+embedded-svc = "0.28.1"
+serde = "1.0.219"
+
+[build-dependencies]
+embuild = "0.33"
