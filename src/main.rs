@@ -52,7 +52,7 @@ fn run_application() -> anyhow::Result<()> {
         peripherals.i2c0,
         peripherals.pins.gpio5,
         peripherals.pins.gpio4,
-        &I2cConfig::default().baudrate(1000.into()),
+        &I2cConfig::default().baudrate(10000.into()),
     )?;
 
     let mut delay = Delay::default();
