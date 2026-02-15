@@ -1,4 +1,3 @@
-use bme280::{Configuration, IIRFilter, Oversampling};
 use dotenvy_macro::dotenv;
 use embedded_svc::{
     http::client::Client as HttpClient,
@@ -7,7 +6,6 @@ use embedded_svc::{
     wifi::{AuthMethod, ClientConfiguration},
 };
 use esp_idf_svc::hal::{
-    delay::Delay,
     i2c::{I2cConfig, I2cDriver},
     prelude::Peripherals,
 };
@@ -25,10 +23,13 @@ const API_ADDRESS: &str = "10.0.0.2:8002";
 const SSID: &str = dotenv!("WIFI_SSID");
 const PASSWORD: &str = dotenv!("WIFI_PASS");
 
+const OVERSAMPLE: u64 = 16;
+
 #[derive(Serialize, Deserialize)]
 struct AHT10Value {
     temperature: f32,
     humidity: f32,
+    pressure: f32,
 }
 
 fn main() {
@@ -55,27 +56,10 @@ fn run_application() -> anyhow::Result<()> {
         &I2cConfig::default().baudrate(10000.into()),
     )?;
 
-    let mut delay = Delay::default();
-
-    #[cfg(feature = "bme280")]
-    let mut bme280 = {
-        let mut bme280 = bme280::i2c::BME280::new_primary(i2c_driver);
-
-        let config = Configuration::default()
-            .with_humidity_oversampling(Oversampling::Oversampling16X)
-            .with_pressure_oversampling(Oversampling::Oversampling16X)
-            .with_temperature_oversampling(Oversampling::Oversampling16X)
-            .with_iir_filter(IIRFilter::Coefficient16);
-
-        bme280.init_with_config(&mut delay, config).unwrap();
-
-        bme280
-    };
-
-    #[cfg(feature = "aht10")]
     let mut aht10 = {
         let mut aht10 = adafruit_aht10::AdafruitAHT10::new(i2c_driver);
         aht10.begin()?;
+        aht10.read_data()?;
         aht10
     };
 
@@ -94,31 +78,27 @@ fn run_application() -> anyhow::Result<()> {
     let mut client = HttpClient::wrap(EspHttpConnection::new(&Default::default())?);
 
     loop {
-        #[cfg(feature = "bme280")]
-        let result = bme280.measure(&mut delay).unwrap();
+        let mut temperature = 0.0;
+        let mut humidity = 0.0;
 
-        #[cfg(feature = "aht10")]
-        let result = {
+        for _ in 0..OVERSAMPLE {
             let result = aht10.read_data()?;
-            AHT10Value {
-                temperature: result.1,
-                humidity: result.0,
-            }
-        };
+            temperature += result.1;
+            humidity += result.0;
 
-        #[cfg(not(any(feature = "bme280", feature = "aht10")))]
-        let result = compile_error!(
-            "enable either the 'bme280' or the 'aht10' feature to build for one of the sensors"
-        );
+            sleep(Duration::from_millis(60_000 / OVERSAMPLE));
+        }
+
+        let result = AHT10Value {
+            temperature: temperature / OVERSAMPLE as f32,
+            humidity: humidity / OVERSAMPLE as f32,
+            pressure: 0.0,
+        };
 
         let result = serde_json::to_string(&result)?;
         let result = result.as_bytes();
 
-        let url = if cfg!(feature = "bme280") {
-            format!("http://{API_ADDRESS}/outdoor_sensor")
-        } else {
-            format!("http://{API_ADDRESS}/indoor_sensor")
-        };
+        let url = format!("http://{API_ADDRESS}/indoor_sensor");
 
         let headers = [
             ("Content-Type", "application/json"),
@@ -128,8 +108,6 @@ fn run_application() -> anyhow::Result<()> {
         request.write_all(result)?;
         request.flush()?;
         request.submit()?;
-
-        sleep(Duration::from_secs(60));
     }
 }
 
