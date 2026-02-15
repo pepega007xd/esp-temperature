@@ -16,7 +16,10 @@ use esp_idf_svc::{
     wifi::{BlockingWifi, EspWifi},
 };
 use serde::{Deserialize, Serialize};
-use std::{thread::sleep, time::Duration};
+use std::{
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
 const API_ADDRESS: &str = "10.0.0.2:8002";
 
@@ -81,12 +84,13 @@ fn run_application() -> anyhow::Result<()> {
         let mut temperature = 0.0;
         let mut humidity = 0.0;
 
-        for _ in 0..OVERSAMPLE {
+        let start = Instant::now();
+        for i in 0..OVERSAMPLE {
             let result = aht10.read_data()?;
             temperature += result.1;
             humidity += result.0;
 
-            sleep(Duration::from_millis(60_000 / OVERSAMPLE));
+            sleep(start + Duration::from_millis(60_000 * (i + 1) / OVERSAMPLE) - Instant::now());
         }
 
         let result = AHT10Value {
