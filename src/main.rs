@@ -1,4 +1,3 @@
-use bme280::{Configuration, IIRFilter, Oversampling};
 use dotenvy_macro::dotenv;
 use embedded_svc::{
     http::client::Client as HttpClient,
@@ -9,7 +8,7 @@ use embedded_svc::{
 use esp_idf_svc::hal::{
     delay::Delay,
     i2c::{I2cConfig, I2cDriver},
-    prelude::Peripherals,
+    peripherals::Peripherals,
 };
 use esp_idf_svc::http::client::EspHttpConnection;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
@@ -37,7 +36,7 @@ fn run_application() -> anyhow::Result<()> {
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_svc::sys::link_patches();
 
-    // setup the sensor
+    // setup the sensors
 
     let peripherals = Peripherals::take()?;
 
@@ -50,15 +49,8 @@ fn run_application() -> anyhow::Result<()> {
 
     let mut delay = Delay::default();
 
-    let mut bme280 = bme280::i2c::BME280::new_primary(i2c_driver);
-
-    let config = Configuration::default()
-        .with_humidity_oversampling(Oversampling::Oversampling16X)
-        .with_pressure_oversampling(Oversampling::Oversampling16X)
-        .with_temperature_oversampling(Oversampling::Oversampling16X)
-        .with_iir_filter(IIRFilter::Coefficient16);
-
-    bme280.init_with_config(&mut delay, config).unwrap();
+    let mut aht20 = aht20_driver::AHT20::new(i2c_driver, aht20_driver::SENSOR_ADDRESS);
+    let mut aht20 = aht20.init(&mut delay).unwrap();
 
     // setup wifi
 
@@ -75,30 +67,31 @@ fn run_application() -> anyhow::Result<()> {
     let mut client = HttpClient::wrap(EspHttpConnection::new(&Default::default())?);
 
     loop {
-        let result = bme280.measure(&mut delay).unwrap();
+        let aht20_result = aht20.measure(&mut delay)?;
+        println!("aht20: {aht20_result:?}");
 
-        #[cfg(not(any(feature = "indoor_sensor", feature = "outdoor_sensor")))]
-        let result = compile_error!(
-            "enable either the 'indoor_sensor' or the 'outdoor_sensor' feature to build for one of the sensors"
-        );
-
-        let result = serde_json::to_string(&result)?;
-        let result = result.as_bytes();
-
-        let url = if cfg!(feature = "outdoor_sensor") {
-            format!("http://{API_ADDRESS}/outdoor_sensor")
-        } else {
-            format!("http://{API_ADDRESS}/indoor_sensor")
-        };
-
-        let headers = [
-            ("Content-Type", "application/json"),
-            ("Content-Length", &result.len().to_string()),
-        ];
-        let mut request = client.post(&url, &headers)?;
-        request.write_all(result)?;
-        request.flush()?;
-        request.submit()?;
+        // #[cfg(not(any(feature = "indoor_sensor", feature = "outdoor_sensor")))]
+        // let result = compile_error!(
+        //     "enable either the 'indoor_sensor' or the 'outdoor_sensor' feature to build for one of the sensors"
+        // );
+        //
+        // let result = serde_json::to_string(&result)?;
+        // let result = result.as_bytes();
+        //
+        // let url = if cfg!(feature = "outdoor_sensor") {
+        //     format!("http://{API_ADDRESS}/outdoor_sensor")
+        // } else {
+        //     format!("http://{API_ADDRESS}/indoor_sensor")
+        // };
+        //
+        // let headers = [
+        //     ("Content-Type", "application/json"),
+        //     ("Content-Length", &result.len().to_string()),
+        // ];
+        // let mut request = client.post(&url, &headers)?;
+        // request.write_all(result)?;
+        // request.flush()?;
+        // request.submit()?;
 
         sleep(Duration::from_secs(60));
     }
