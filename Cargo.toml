@@ -27,7 +27,9 @@ anyhow = "1.0.98"
 dotenvy_macro = "0.15.7"
 embedded-svc = "0.29.0"
 aht20-driver = { version = "2.0.0", default-features = false }
-bmp280-driver = "0.0.7"
+embedded-hal-bus = "0.3.0"
+bme280 = { version = "0.5.1", features = ["with_std"]}
+serde = "1.0.228"
 
 [build-dependencies]
 embuild = "0.33"

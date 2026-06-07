@@ -1,4 +1,6 @@
+use bme280::{Configuration, IIRFilter, Oversampling};
 use dotenvy_macro::dotenv;
+use embedded_hal_bus::i2c as i2c_bus;
 use embedded_svc::{
     http::client::Client as HttpClient,
     io::Write,
@@ -16,12 +18,19 @@ use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     wifi::{BlockingWifi, EspWifi},
 };
-use std::{thread::sleep, time::Duration};
+use std::{cell::RefCell, thread::sleep, time::Duration};
 
 const API_ADDRESS: &str = "10.0.0.2:8002";
 
 const SSID: &str = dotenv!("WIFI_SSID");
 const PASSWORD: &str = dotenv!("WIFI_PASS");
+
+#[derive(serde::Serialize)]
+struct SensorData {
+    temperature: f32,
+    humidity: f32,
+    pressure: f32,
+}
 
 fn main() {
     if let Err(e) = run_application() {
@@ -38,19 +47,31 @@ fn run_application() -> anyhow::Result<()> {
 
     // setup the sensors
 
+    let mut delay = Delay::default();
+
     let peripherals = Peripherals::take()?;
 
     let i2c_driver = I2cDriver::new(
         peripherals.i2c0,
-        peripherals.pins.gpio5,
-        peripherals.pins.gpio4,
+        peripherals.pins.gpio5, // SDA
+        peripherals.pins.gpio4, // SCL
         &I2cConfig::default().baudrate(10_000.into()),
     )?;
+    let i2c_ref_cell = RefCell::new(i2c_driver);
 
-    let mut delay = Delay::default();
+    let mut bmp280 = bme280::i2c::BME280::new_secondary(i2c_bus::RefCellDevice::new(&i2c_ref_cell));
+    let config = Configuration::default()
+        .with_humidity_oversampling(Oversampling::Oversampling16X)
+        .with_pressure_oversampling(Oversampling::Oversampling16X)
+        .with_temperature_oversampling(Oversampling::Oversampling16X)
+        .with_iir_filter(IIRFilter::Coefficient16);
+    bmp280.init_with_config(&mut delay, config)?;
 
-    let mut aht20 = aht20_driver::AHT20::new(i2c_driver, aht20_driver::SENSOR_ADDRESS);
-    let mut aht20 = aht20.init(&mut delay).unwrap();
+    let mut aht20 = aht20_driver::AHT20::new(
+        i2c_bus::RefCellDevice::new(&i2c_ref_cell),
+        aht20_driver::SENSOR_ADDRESS,
+    );
+    let mut aht20 = aht20.init(&mut delay)?;
 
     // setup wifi
 
@@ -66,32 +87,44 @@ fn run_application() -> anyhow::Result<()> {
 
     let mut client = HttpClient::wrap(EspHttpConnection::new(&Default::default())?);
 
+    // read invalid data
+    for _ in 0..3 {
+        let _ = aht20.measure(&mut delay)?;
+        let _ = bmp280.measure(&mut delay)?;
+        sleep(Duration::from_secs(1));
+    }
+
     loop {
         let aht20_result = aht20.measure(&mut delay)?;
-        println!("aht20: {aht20_result:?}");
+        let bmp280_result = bmp280.measure(&mut delay)?;
 
-        // #[cfg(not(any(feature = "indoor_sensor", feature = "outdoor_sensor")))]
-        // let result = compile_error!(
-        //     "enable either the 'indoor_sensor' or the 'outdoor_sensor' feature to build for one of the sensors"
-        // );
-        //
-        // let result = serde_json::to_string(&result)?;
-        // let result = result.as_bytes();
-        //
-        // let url = if cfg!(feature = "outdoor_sensor") {
-        //     format!("http://{API_ADDRESS}/outdoor_sensor")
-        // } else {
-        //     format!("http://{API_ADDRESS}/indoor_sensor")
-        // };
-        //
-        // let headers = [
-        //     ("Content-Type", "application/json"),
-        //     ("Content-Length", &result.len().to_string()),
-        // ];
-        // let mut request = client.post(&url, &headers)?;
-        // request.write_all(result)?;
-        // request.flush()?;
-        // request.submit()?;
+        let result = SensorData {
+            temperature: bmp280_result.temperature,
+            humidity: aht20_result.humidity,
+            pressure: bmp280_result.pressure,
+        };
+        let result = serde_json::to_string(&result)?;
+        let result = result.as_bytes();
+
+        #[cfg(not(any(feature = "indoor_sensor", feature = "outdoor_sensor")))]
+        compile_error!(
+            "enable either the 'indoor_sensor' or the 'outdoor_sensor' feature to build for one of the sensors"
+        );
+
+        let url = if cfg!(feature = "outdoor_sensor") {
+            format!("http://{API_ADDRESS}/outdoor_sensor")
+        } else {
+            format!("http://{API_ADDRESS}/indoor_sensor")
+        };
+
+        let headers = [
+            ("Content-Type", "application/json"),
+            ("Content-Length", &result.len().to_string()),
+        ];
+        let mut request = client.post(&url, &headers)?;
+        request.write_all(result)?;
+        request.flush()?;
+        request.submit()?;
 
         sleep(Duration::from_secs(60));
     }
